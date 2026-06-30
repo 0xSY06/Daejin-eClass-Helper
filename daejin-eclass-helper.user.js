@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Daejin eClass Lecture Helper
 // @namespace    local.daejin.eclass.helper
-// @version      1.0.0
-// @description  Helper for Daejin eClass course/viewer/CMS pages.
+// @version      1.1.0
+// @description  Helper for Daejin eClass course/viewer/CMS pages with playback speed control.
 // @match        *://eclass.daejin.ac.kr/*
 // @match        *://cms.daejin.ac.kr/*
 // @license      MIT
@@ -14,6 +14,7 @@
   "use strict";
 
   var GLOBAL_KEY = "dj_eclass_helper_global";
+  var PLAYBACK_RATE_KEY = "dj_eclass_helper_playback_rate";
   var FLOW_COURSE_KEY = "dj_eclass_helper_active_course_id";
   var globalState = readJson(GLOBAL_KEY, { activeCourseId: "" });
   var pageUrl = new URL(location.href);
@@ -35,7 +36,8 @@
     autoOpenViewer: true,
     autoNext: true,
     autoResume: true,
-    panelCollapsed: false
+    panelCollapsed: false,
+    playbackRate: 1.0
   };
   var state = Object.assign({}, DEFAULT_STATE, readJson(STATE_KEY, DEFAULT_STATE));
 
@@ -44,33 +46,42 @@
     state.autoOpenViewer = true;
     state.autoNext = true;
     state.autoResume = true;
+    state.playbackRate = 1.0;
     writeJson(STATE_KEY, state);
   }
 
-  // 내부적으로 무음 기능 항상 강제 유지 (UI 제거됨)
+  state.playbackRate = normalizePlaybackRate(readPlaybackRate());
   state.muted = true;
 
   if (!isAllowedPage()) return;
 
   function readJson(key, fallback) {
-    try {
-      var raw = localStorage.getItem(key);
-      return raw ? JSON.parse(raw) : fallback;
-    } catch (error) {
-      return fallback;
-    }
+    try { var raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; } catch (error) { return fallback; }
   }
 
   function writeJson(key, value) {
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch (error) {}
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch (error) {}
+  }
+
+  function normalizePlaybackRate(value) {
+    var rate = Number(value);
+    if (!Number.isFinite(rate)) return 1;
+    rate = Math.round(rate);
+    if (rate < 1) return 1;
+    if (rate > 15) return 15;
+    return rate;
+  }
+
+  function readPlaybackRate() {
+    try { return localStorage.getItem(PLAYBACK_RATE_KEY) || state.playbackRate; } catch (error) { return state.playbackRate; }
+  }
+
+  function writePlaybackRate() {
+    try { localStorage.setItem(PLAYBACK_RATE_KEY, String(normalizePlaybackRate(state.playbackRate))); } catch (error) {}
   }
 
   function syncAutoResumeFlag() {
-    try {
-      localStorage.setItem("dj_eclass_helper_auto_resume_flag", state.autoResume ? "1" : "0");
-    } catch (error) {}
+    try { localStorage.setItem("dj_eclass_helper_auto_resume_flag", state.autoResume ? "1" : "0"); } catch (error) {}
   }
 
   function syncStateToFrames() {
@@ -78,37 +89,25 @@
     frames.forEach(function(f) {
       try {
         if (f.contentWindow) {
-          f.contentWindow.postMessage({
-            source: "dj-eclass-helper",
-            type: "state-update",
-            state: state
-          }, "*");
+          f.contentWindow.postMessage({ source: "dj-eclass-helper", type: "state-update", state: state }, "*");
         }
       } catch(e) {}
     });
   }
 
   function saveState() {
+    writePlaybackRate();
     writeJson(STATE_KEY, state);
     syncAutoResumeFlag();
     syncStateToFrames();
   }
 
   function readSessionCourseId() {
-    try {
-      return sessionStorage.getItem(FLOW_COURSE_KEY) || "";
-    } catch (error) {
-      return "";
-    }
+    try { return sessionStorage.getItem(FLOW_COURSE_KEY) || ""; } catch (error) { return ""; }
   }
 
   function inferCourseIdFromDocument() {
-    var selectors = [
-      'a[href*="/course/view.php?id="]',
-      'link[href*="/course/view.php?id="]',
-      'form[action*="/course/view.php?id="]'
-    ];
-
+    var selectors = ['a[href*="/course/view.php?id="]', 'link[href*="/course/view.php?id="]', 'form[action*="/course/view.php?id="]'];
     for (var i = 0; i < selectors.length; i += 1) {
       var elements = Array.from(document.querySelectorAll(selectors[i]));
       for (var j = 0; j < elements.length; j += 1) {
@@ -117,17 +116,11 @@
         if (id) return id;
       }
     }
-
-    var textCandidates = [
-      document.body && document.body.innerHTML,
-      document.referrer
-    ];
-
+    var textCandidates = [document.body && document.body.innerHTML, document.referrer];
     for (var k = 0; k < textCandidates.length; k += 1) {
       var found = extractCourseId(textCandidates[k] || "");
       if (found) return found;
     }
-
     return "";
   }
 
@@ -136,13 +129,8 @@
     return match ? match[1] : "";
   }
 
-  function getQueue() {
-    return readJson(QUEUE_KEY, []);
-  }
-
-  function setQueue(queue) {
-    writeJson(QUEUE_KEY, queue);
-  }
+  function getQueue() { return readJson(QUEUE_KEY, []); }
+  function setQueue(queue) { writeJson(QUEUE_KEY, queue); }
 
   function markFlowActive() {
     try {
@@ -152,23 +140,16 @@
   }
 
   function flowActive() {
-    try {
-      return sessionStorage.getItem(FLOW_KEY) === "1";
-    } catch (error) {
-      return false;
-    }
+    try { return sessionStorage.getItem(FLOW_KEY) === "1"; } catch (error) { return false; }
   }
 
   function clearFlowActive() {
-    try {
-      sessionStorage.removeItem(FLOW_KEY);
-    } catch (error) {}
+    try { sessionStorage.removeItem(FLOW_KEY); } catch (error) {}
   }
 
   function isAllowedPage() {
     if (location.hostname.indexOf("cms.daejin.ac.kr") !== -1) return true;
     if (location.hostname.indexOf("eclass.daejin.ac.kr") === -1) return false;
-    
     var p = location.pathname;
     return p.indexOf("/course/view.php") !== -1 || p.indexOf("/mod/") !== -1;
   }
@@ -196,9 +177,7 @@
   }
 
   function cssText(styles) {
-    return Object.keys(styles).map(function (key) {
-      return key + ":" + styles[key];
-    }).join(";");
+    return Object.keys(styles).map(function (key) { return key + ":" + styles[key]; }).join(";");
   }
 
   var statusClearTimeoutId = null;
@@ -207,21 +186,14 @@
     var status = document.querySelector("#dj-helper-status");
     if (status) {
       status.textContent = message;
-      
       if (statusClearTimeoutId) clearTimeout(statusClearTimeoutId);
-      
       statusClearTimeoutId = setTimeout(function () {
         if (status) status.textContent = "대기 중";
       }, 3000);
-      
     } else {
       try {
         if (window.parent && window.parent !== window) {
-          window.parent.postMessage({
-            source: "dj-eclass-helper",
-            type: "status-update",
-            message: message
-          }, "*");
+          window.parent.postMessage({ source: "dj-eclass-helper", type: "status-update", message: message }, "*");
         }
       } catch(e) {}
     }
@@ -235,13 +207,7 @@
   }
 
   function activityContainer(anchor) {
-    return (
-      anchor.closest("li") ||
-      anchor.closest(".activity") ||
-      anchor.closest(".activityinstance") ||
-      anchor.closest("[class*=activity]") ||
-      anchor.parentElement
-    );
+    return anchor.closest("li") || anchor.closest(".activity") || anchor.closest(".activityinstance") || anchor.closest("[class*=activity]") || anchor.parentElement;
   }
 
   function sectionNumberFor(anchor) {
@@ -265,7 +231,7 @@
   function sectionAlreadyAttended(sectionNumber, attendanceMap) {
     if (!sectionNumber || !attendanceMap.has(sectionNumber)) return false;
     var status = String(attendanceMap.get(sectionNumber) || "");
-    return status.indexOf("\ucd9c\uc11d") !== -1;
+    return status.indexOf("출석") !== -1;
   }
 
   function activityDone(container) {
@@ -277,39 +243,15 @@
     }).join(" ").toLowerCase();
     var all = text + " " + cls + " " + attrs;
 
-    var incomplete = [
-      "not completed",
-      "incomplete",
-      "completion-n",
-      "completion_incomplete",
-      "\ubbf8\uc644\ub8cc",
-      "\ubbf8\ucd9c\uc11d",
-      "\ud559\uc2b5\uc804",
-      "\uacb0\uc11d"
-    ];
-    var complete = [
-      "completed",
-      "completion-y",
-      "completion_complete",
-      "\uc644\ub8cc",
-      "\ucd9c\uc11d\uc644\ub8cc",
-      "\ud559\uc2b5\uc644\ub8cc",
-      "\uc218\uac15\uc644\ub8cc",
-      "\ucd9c\uc11d"
-    ];
+    var incomplete = ["not completed", "incomplete", "completion-n", "completion_incomplete", "미완료", "미출석", "학습전", "결석"];
+    var complete = ["completed", "completion-y", "completion_complete", "완료", "출석완료", "학습완료", "수강완료", "출석"];
 
     if (incomplete.some(function (hint) { return all.indexOf(hint) !== -1; })) return false;
     return complete.some(function (hint) { return all.indexOf(hint) !== -1; });
   }
 
   function lectureTitle(anchor, container, index) {
-    var raw =
-      anchor.getAttribute("title") ||
-      anchor.getAttribute("aria-label") ||
-      anchor.innerText ||
-      anchor.textContent ||
-      (container && (container.innerText || container.textContent)) ||
-      "Lecture " + (index + 1);
+    var raw = anchor.getAttribute("title") || anchor.getAttribute("aria-label") || anchor.innerText || anchor.textContent || (container && (container.innerText || container.textContent)) || "Lecture " + (index + 1);
     return raw.replace(/\s+/g, " ").trim();
   }
 
@@ -317,10 +259,8 @@
     var title = String(lecture.title || "");
     var match = title.match(/^\s*(\d{1,3})\s*[-_.]\s*(\d{1,3})/);
     if (match) return Number(match[1]) * 1000 + Number(match[2]);
-
     match = title.match(/^\s*(\d{1,3})\b/);
     if (match) return Number(match[1]) * 1000;
-
     return 1000000 + index;
   }
 
@@ -332,12 +272,9 @@
       var href = a.href;
       if (href.indexOf("/mod/") === -1) return false;
       if (!/(view|viewer)\.php/.test(href)) return false;
-      
       var excludedModules = ["board", "forum", "ubboard", "assign", "quiz", "folder", "page", "resource", "label", "feedback"];
       for (var i = 0; i < excludedModules.length; i++) {
-        if (href.indexOf("/mod/" + excludedModules[i] + "/") !== -1) {
-          return false;
-        }
+        if (href.indexOf("/mod/" + excludedModules[i] + "/") !== -1) return false;
       }
       return true;
     });
@@ -345,18 +282,14 @@
     var lectures = anchors.map(function (anchor, index) {
       var container = activityContainer(anchor);
       var sectionNumber = sectionNumberFor(anchor);
-      
       var targetHref = anchor.href; 
       var onclickVal = anchor.getAttribute("onclick") || "";
       var viewerMatch = onclickVal.match(/window\.open\(['"]([^'"]+)['"]/);
       if (viewerMatch) {
         var url = viewerMatch[1];
-        if (url.indexOf("http") !== 0 && url.indexOf("/") === 0) {
-          url = location.origin + url;
-        }
+        if (url.indexOf("http") !== 0 && url.indexOf("/") === 0) url = location.origin + url;
         targetHref = url; 
       }
-
       return {
         title: lectureTitle(anchor, container, index),
         href: targetHref,
@@ -367,13 +300,9 @@
     });
 
     var uniqueMap = new Map();
-    lectures.forEach(function (lecture) {
-      if (!uniqueMap.has(lecture.href)) uniqueMap.set(lecture.href, lecture);
-    });
+    lectures.forEach(function (lecture) { if (!uniqueMap.has(lecture.href)) uniqueMap.set(lecture.href, lecture); });
+    var unique = Array.from(uniqueMap.values()).sort(function (a, b) { return lectureOrderKey(a, 0) - lectureOrderKey(b, 0); });
 
-    var unique = Array.from(uniqueMap.values()).sort(function (a, b) {
-      return lectureOrderKey(a, 0) - lectureOrderKey(b, 0);
-    });
     var unfinished = unique.filter(function (lecture) {
       return !lecture.completed;
     });
@@ -387,40 +316,28 @@
   function findSameOriginFrames() {
     var docs = [document];
     Array.from(document.querySelectorAll("iframe, frame")).forEach(function (frame) {
-      try {
-        if (frame.contentDocument) docs.push(frame.contentDocument);
-      } catch (error) {}
+      try { if (frame.contentDocument) docs.push(frame.contentDocument); } catch (error) {}
     });
     return docs;
   }
 
   function mediaElements() {
-    return findSameOriginFrames().flatMap(function (doc) {
-      return Array.from(doc.querySelectorAll("video, audio"));
-    });
+    return findSameOriginFrames().flatMap(function (doc) { return Array.from(doc.querySelectorAll("video, audio")); });
   }
 
   function parseClock(value) {
-    var parts = String(value || "").trim().split(":").map(function (part) {
-      return Number(part);
-    });
+    var parts = String(value || "").trim().split(":").map(function (part) { return Number(part); });
     if (!parts.length || parts.some(function (part) { return !Number.isFinite(part); })) return NaN;
-    return parts.reduce(function (total, part) {
-      return total * 60 + part;
-    }, 0);
+    return parts.reduce(function (total, part) { return total * 60 + part; }, 0);
   }
 
   function controllerTimes() {
     return findSameOriginFrames().flatMap(function (doc) {
-      return Array.from(doc.querySelectorAll(".vc-pctrl-play-time-text-area")).map(function (el) {
+      return Array.from(doc.querySelectorAll(".vc-pctrl-play-time-text-area, .jw-text-duration, .vjs-duration")).map(function (el) {
         var text = (el.innerText || el.textContent || "").trim();
         var match = text.match(/(\d{1,2}(?::\d{2}){1,2})\s*\/\s*(\d{1,2}(?::\d{2}){1,2})/);
         if (!match) return null;
-        return {
-          text: text,
-          current: parseClock(match[1]),
-          duration: parseClock(match[2])
-        };
+        return { text: text, current: parseClock(match[1]), duration: parseClock(match[2]) };
       }).filter(Boolean);
     });
   }
@@ -434,20 +351,12 @@
     endHandledAt = now;
 
     setStatus("재생 종료 감지. 3초 후 다음 강의로 이동합니다.");
-
-    if (state.autoNext) {
-      // 1.5초에서 3초로 넉넉하게 대기하여 서버 저장 시간 확보
-      setTimeout(function () {
-        requestNextLecture();
-      }, 3000);
-    }
+    if (state.autoNext) setTimeout(function () { requestNextLecture(); }, 3000);
   }
 
   function requestNextLecture() {
     if (location.hostname.indexOf("cms.daejin.ac.kr") !== -1) {
-      try {
-        top.postMessage({ source: "dj-eclass-helper", type: "open-next" }, "https://eclass.daejin.ac.kr");
-      } catch (error) {}
+      try { top.postMessage({ source: "dj-eclass-helper", type: "open-next" }, "https://eclass.daejin.ac.kr"); } catch (error) {}
       return;
     }
     openNextLecture();
@@ -456,20 +365,11 @@
   function listenForFrameMessages() {
     window.addEventListener("message", function (event) {
       if (!event.data || event.data.source !== "dj-eclass-helper") return;
-      
       if (event.data.type === "open-next" && state.autoNext) {
-        if (location.hostname.indexOf("eclass.daejin.ac.kr") !== -1) {
-          openNextLecture();
-        }
+        if (location.hostname.indexOf("eclass.daejin.ac.kr") !== -1) openNextLecture();
       }
-      
-      if (event.data.type === "state-update") {
-        Object.assign(state, event.data.state);
-      }
-      
-      if (event.data.type === "status-update") {
-        setStatus(event.data.message);
-      }
+      if (event.data.type === "state-update") Object.assign(state, event.data.state);
+      if (event.data.type === "status-update") setStatus(event.data.message);
     });
   }
 
@@ -489,19 +389,12 @@
     mediaElements().forEach(function (media) {
       if (media.dataset.djEndWatcherAttached === "1") return;
       media.dataset.djEndWatcherAttached = "1";
-      media.addEventListener("ended", function () {
-        if (mediaLooksEnded(media)) handlePlaybackEnd("media");
-      });
+      media.addEventListener("ended", function () { if (mediaLooksEnded(media)) handlePlaybackEnd("media"); });
     });
 
     var times = controllerTimes();
-    var realControllerTime = times.find(function (time) {
-      return Number.isFinite(time.current) && Number.isFinite(time.duration) && time.duration >= 60;
-    });
-
-    if (realControllerTime && realControllerTime.current > 5) {
-      realPlaybackSeen = true;
-    }
+    var realControllerTime = times.find(function (time) { return Number.isFinite(time.current) && Number.isFinite(time.duration) && time.duration >= 60; });
+    if (realControllerTime && realControllerTime.current > 5) realPlaybackSeen = true;
 
     if (realPlaybackSeen && mediaElements().some(mediaLooksEnded)) {
       handlePlaybackEnd("media-time");
@@ -509,39 +402,39 @@
     }
 
     var endedByController = times.some(function (time) {
-      return (
-        realPlaybackSeen &&
-        Number.isFinite(time.current) &&
-        Number.isFinite(time.duration) &&
-        time.duration >= 60 &&
-        time.current >= time.duration - 2
-      );
+      return (realPlaybackSeen && Number.isFinite(time.current) && Number.isFinite(time.duration) && time.duration >= 60 && time.current >= time.duration - 2);
     });
+    if (endedByController) handlePlaybackEnd("controller");
+  }
 
-    if (endedByController) {
-      handlePlaybackEnd("controller");
-    }
+  function injectAntiCheatBypass() {
+    try {
+      var script = document.createElement("script");
+      script.textContent = "(" + function () {
+        try {
+          Object.defineProperty(document, 'hidden', { value: false, writable: false });
+          Object.defineProperty(document, 'visibilityState', { value: 'visible', writable: false });
+          window.addEventListener('visibilitychange', function(e) { e.stopImmediatePropagation(); }, true);
+          window.addEventListener('blur', function(e) { e.stopImmediatePropagation(); }, true);
+        } catch(e) {}
+      }.toString() + ")();";
+      (document.head || document.documentElement).appendChild(script);
+      script.remove();
+    } catch(e) {}
   }
 
   function injectMuteHijack() {
     try {
       var script = document.createElement("script");
       script.textContent = "(" + function () {
+        if (typeof window.jwplayer !== 'undefined') return;
         window.__djMuted = true; 
         try {
           var origVol = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'volume');
           var origMuted = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'muted');
-          
           if (origVol && origMuted) {
-            Object.defineProperty(HTMLMediaElement.prototype, 'volume', {
-              get: function() { return origVol.get.call(this); },
-              set: function(val) { origVol.set.call(this, 0); } 
-            });
-            
-            Object.defineProperty(HTMLMediaElement.prototype, 'muted', {
-              get: function() { return origMuted.get.call(this); },
-              set: function(val) { origMuted.set.call(this, true); } 
-            });
+            Object.defineProperty(HTMLMediaElement.prototype, 'volume', { get: function() { return origVol.get.call(this); }, set: function(val) { origVol.set.call(this, 0); } });
+            Object.defineProperty(HTMLMediaElement.prototype, 'muted', { get: function() { return origMuted.get.call(this); }, set: function(val) { origMuted.set.call(this, true); } });
           }
         } catch (e) {}
       }.toString() + ")();";
@@ -550,19 +443,101 @@
     } catch (e) {}
   }
 
+  function forceRemoveBeforeUnload() {
+    findSameOriginFrames().forEach(function (doc) {
+      try {
+        var script = doc.createElement("script");
+        script.textContent = "(" + function () {
+          if (typeof window.jQuery !== 'undefined' && window.jQuery.fn) {
+            window.jQuery(window).off('beforeunload');
+          }
+          window.onbeforeunload = null;
+        }.toString() + ")();";
+        (doc.head || doc.documentElement).appendChild(script);
+        script.remove();
+      } catch (e) {}
+    });
+  }
+
   function applyMuteState() {
     var count = 0;
-    var items = mediaElements();
-    items.forEach(function (media) {
+    mediaElements().forEach(function (media) {
       if (!media.muted || media.volume > 0) {
         media.muted = true;
         media.volume = 0;
         if (!media.hasAttribute("muted")) media.setAttribute("muted", "true");
-        try { media.dispatchEvent(new Event("volumechange")); } catch(e){}
         count++;
       }
     });
     return count;
+  }
+
+  function isForcedSpeedPage() {
+    var path = location.pathname;
+    return (path.indexOf("/mod/vod/viewer.php") !== -1 || path.indexOf("/mod/xncommons/viewer.php") !== -1 || path.indexOf("/mod/xncommons/viewer/default/") !== -1);
+  }
+
+  function isVodViewerPage() {
+    return location.pathname.indexOf("/mod/vod/viewer.php") !== -1;
+  }
+
+  function applyPlaybackRate() {
+    var input = document.querySelector("#dj-helper-speed-input");
+    if (input) {
+      var inputRate = Number(input.value);
+      if (Number.isInteger(inputRate) && inputRate >= 1 && inputRate <= 15) {
+        state.playbackRate = inputRate;
+      }
+    }
+
+    var rate = normalizePlaybackRate(state.playbackRate);
+    if (state.playbackRate !== rate) state.playbackRate = rate;
+    writePlaybackRate();
+
+    mediaElements().forEach(function (media) {
+      try {
+        if (media.playbackRate !== rate) media.playbackRate = rate;
+        if (media.defaultPlaybackRate !== rate) media.defaultPlaybackRate = rate;
+        if (media.dataset.djSpeedLocked !== "1") {
+          media.dataset.djSpeedLocked = "1";
+          media.addEventListener("play", schedulePlaybackRateApply);
+          media.addEventListener("ratechange", function () {
+            var targetRate = normalizePlaybackRate(state.playbackRate);
+            if (media.playbackRate !== targetRate) media.playbackRate = targetRate;
+          });
+        }
+      } catch (error) {}
+    });
+
+    if (isForcedSpeedPage()) injectPlaybackRateBridge(rate);
+  }
+
+  function schedulePlaybackRateApply() {
+    [0, 100, 300, 800, 1500, 3000].forEach(function (delay) { setTimeout(applyPlaybackRate, delay); });
+  }
+
+  function injectPlaybackRateBridge(rate) {
+    try {
+      var script = document.createElement("script");
+      script.textContent = "(" + function (targetRate) {
+        function apply(media) { try { media.playbackRate = targetRate; media.defaultPlaybackRate = targetRate; } catch (e) {} }
+        try {
+          Array.from(document.querySelectorAll("video, audio")).forEach(apply);
+          Array.from(document.querySelectorAll("iframe, frame")).forEach(function (frame) {
+            try { if (frame.contentDocument) Array.from(frame.contentDocument.querySelectorAll("video, audio")).forEach(apply); } catch (e) {}
+          });
+          if (window.videoTag) apply(window.videoTag);
+          if (typeof window.currentRate !== "undefined") window.currentRate = targetRate;
+          if (typeof window.jwplayer === "function") {
+            var player = window.jwplayer();
+            var container = player && player.getContainer ? player.getContainer() : null;
+            if (container) Array.from(container.querySelectorAll("video, audio")).forEach(apply);
+          }
+        } catch (e) {}
+      }.toString() + ")(" + JSON.stringify(rate) + ");";
+      (document.head || document.documentElement).appendChild(script);
+      script.remove();
+    } catch (error) {}
   }
 
   function candidateButtons() {
@@ -574,7 +549,10 @@
       ".player-restart-btn",
       ".vjs-play-control",
       ".vjs-big-play-button",
+      ".jw-display-icon-container",
+      ".jw-display-icon-display",
       ".jw-icon-playback",
+      ".jw-icon-play",
       ".plyr__control[data-plyr=play]",
       ".mejs-playpause-button button",
       "[class*='play-btn']",
@@ -582,110 +560,117 @@
       "[class*=play][role=button]",
       "button[aria-label*='Play' i]",
       "button[title*='Play' i]",
-      "button[aria-label*='재생']",
-      "button[title*='재생']",
       "a[aria-label*='Play' i]",
       "a[title*='Play' i]",
-      "button[aria-label*='\uc7ac\uc0dd']",
-      "button[title*='\uc7ac\uc0dd']",
-      "a[aria-label*='\uc7ac\uc0dd']",
-      "a[title*='\uc7ac\uc0dd']"
+      "button[aria-label*='재생']",
+      "button[title*='재생']",
+      "a[aria-label*='재생']",
+      "a[title*='재생']"
     ];
-
     return findSameOriginFrames().flatMap(function (doc) {
-      return selectors.flatMap(function (selector) {
-        try {
-          return Array.from(doc.querySelectorAll(selector));
-        } catch (error) {
-          return [];
-        }
-      });
+      return selectors.flatMap(function (selector) { try { return Array.from(doc.querySelectorAll(selector)); } catch (error) { return []; } });
     });
   }
 
   function clickPlayButton() {
     var buttons = candidateButtons();
     for (var i = 0; i < buttons.length; i += 1) {
-      var className = String(buttons[i].className || "");
-      if (className.indexOf("vc-pctrl-on-playing") !== -1) continue;
-      if (visible(buttons[i])) {
-        buttons[i].click();
-        return true;
-      }
+      if (String(buttons[i].className || "").indexOf("vc-pctrl-on-playing") !== -1) continue;
+      if (String(buttons[i].className || "").indexOf("vjs-playing") !== -1) continue;
+      if (visible(buttons[i])) { buttons[i].click(); return true; }
     }
     return false;
+  }
+
+  function tryEmbeddedPlayerPlay() {
+    if (!isPlaybackSupportPage()) return false;
+    var didTry = false;
+    findSameOriginFrames().forEach(function (doc) {
+      try {
+        var script = doc.createElement("script");
+        script.textContent = "(" + function () {
+          var tried = false;
+          try {
+            if (typeof window.jwplayer === "function") {
+              var player = window.jwplayer();
+              if (player && typeof player.play === "function") {
+                if (player.getState && player.getState() === "playing") {
+                } else {
+                  if (typeof player.setMute === "function") player.setMute(true);
+                  player.play(true);
+                  tried = true; 
+                }
+              }
+            }
+          } catch (e) {}
+          try {
+            Array.from(document.querySelectorAll("video, audio")).forEach(function (media) {
+              try { 
+                if (!media.paused && !media.ended) return;
+                media.muted = true; media.volume = 0; media.playsInline = true; 
+                var result = media.play(); 
+                if (result && result.catch) result.catch(function () {}); 
+                if (!result || !media.paused) tried = true; 
+              } catch (e) {}
+            });
+          } catch (e) {}
+          if (tried) document.documentElement.setAttribute("data-dj-played", "1");
+        }.toString() + ")();";
+        
+        doc.documentElement.removeAttribute("data-dj-played");
+        (doc.head || doc.documentElement).appendChild(script);
+        if (doc.documentElement.getAttribute("data-dj-played") === "1") {
+          didTry = true;
+        }
+        doc.documentElement.removeAttribute("data-dj-played");
+        script.remove();
+      } catch (error) {}
+    });
+    if (didTry) schedulePlaybackRateApply();
+    return didTry;
   }
 
   async function playCurrentMedia(isManual) {
     var manual = (isManual === true || (isManual && isManual.type === "click"));
+    if (isCourseControlPage()) { if (!getQueue().length) collectLectures(); openNextLecture(); return true; }
+    if (!isPlaybackSupportPage()) { if (manual) setStatus("재생은 뷰어/플레이어 페이지에서만 동작합니다"); return false; }
 
-    if (isCourseControlPage()) {
-      if (!getQueue().length) collectLectures();
-      openNextLecture();
-      return true;
-    }
-
-    if (!isPlaybackSupportPage()) {
-      if (manual) setStatus("재생은 뷰어/플레이어 페이지에서만 동작합니다");
-      return false;
-    }
-
-    var docs = findSameOriginFrames();
     var uiPlaying = false;
-    for (var d = 0; d < docs.length; d++) {
-      try {
-        if (docs[d].querySelector(".vc-pctrl-on-playing, .vjs-playing, .plyr--playing, .jw-state-playing")) {
-          uiPlaying = true;
-          break;
-        }
-      } catch (e) {}
-    }
+    findSameOriginFrames().forEach(function(doc) {
+      try { if (doc.querySelector(".vc-pctrl-on-playing, .vjs-playing, .plyr--playing, .jw-state-playing")) uiPlaying = true; } catch (e) {}
+    });
 
-    if (uiPlaying || mediaElements().some(function (media) {
-      return !media.paused && !media.ended;
-    })) {
-      setStatus("이미 재생 중입니다");
+    if (uiPlaying || mediaElements().some(function (media) { return !media.paused && !media.ended; })) {
+      schedulePlaybackRateApply();
+      if (manual) setStatus("이미 재생 중입니다");
       return true;
     }
 
-    if (clickPlayButton()) {
-      setStatus("재생 버튼을 눌렀습니다");
-      return true;
-    }
+    if (isVodViewerPage() && tryEmbeddedPlayerPlay()) { setStatus("플레이어 재생을 시도했습니다"); return true; }
+    if (clickPlayButton()) { schedulePlaybackRateApply(); setStatus("재생 버튼을 눌렀습니다"); return true; }
+    if (!isVodViewerPage() && tryEmbeddedPlayerPlay()) { setStatus("플레이어 재생을 시도했습니다"); return true; }
 
     var items = mediaElements();
+    var playedAnything = false;
     for (var i = 0; i < items.length; i += 1) {
-      var media = items[i];
       try {
-        media.playsInline = true;
-        var playPromise = media.play();
-        if (playPromise !== undefined) {
-          await playPromise.catch(function(error) {}); 
+        if (!items[i].paused && !items[i].ended) continue;
+        items[i].playsInline = true;
+        var playPromise = items[i].play();
+        if (playPromise !== undefined && typeof playPromise.then === "function") {
+          await playPromise.then(function () { playedAnything = true; }).catch(function(error) {});
+        } else {
+          playedAnything = true;
         }
-        setStatus("영상을 재생했습니다");
-        return true;
       } catch (error) {}
     }
 
-    if (manual) {
-      setStatus("재생할 영상/버튼을 찾지 못했습니다");
+    if (playedAnything) {
+      schedulePlaybackRateApply(); setStatus("영상을 재생했습니다"); return true;
     }
-    return false;
-  }
 
-  // 화면 이탈 시 뜨는 성가신 팝업(beforeunload)을 지속적으로 무력화하는 기능
-  function removeUnloadBlocker() {
-    try {
-      var script = document.createElement("script");
-      script.textContent = "(" + function () {
-        window.onbeforeunload = null;
-        if (typeof window.jQuery !== 'undefined') {
-          window.jQuery(window).off('beforeunload');
-        }
-      }.toString() + ")();";
-      (document.head || document.documentElement).appendChild(script);
-      script.remove();
-    } catch (e) {}
+    if (manual) setStatus("재생할 영상/버튼을 찾지 못했습니다");
+    return false;
   }
 
   function viewerLinks() {
@@ -694,109 +679,58 @@
       if (el.href) links.push(el.href);
       if (el.src) links.push(el.src);
     });
-
     Array.from(document.querySelectorAll("[onclick]")).forEach(function(el) {
       var match = String(el.getAttribute("onclick")).match(/window\.open\(['"]([^'"]+)['"]/);
       if (match) {
         var url = match[1];
-        if (url.indexOf("http") !== 0 && url.indexOf("/") === 0) {
-          url = location.origin + url;
-        }
+        if (url.indexOf("http") !== 0 && url.indexOf("/") === 0) url = location.origin + url;
         links.push(url);
       }
     });
-
     return Array.from(new Set(links)).filter(function (href) {
-      return (
-        /\/mod\/[^/]+\/viewer\.php/.test(href) ||
-        /\/mod\/[^/]+\/viewer\/default\//.test(href) ||
-        /^https:\/\/cms\.daejin\.ac\.kr\/em\//.test(href)
-      );
+      return (/\/mod\/[^/]+\/viewer\.php/.test(href) || /\/mod\/[^/]+\/viewer\/default\//.test(href) || /^https:\/\/cms\.daejin\.ac\.kr\/em\//.test(href));
     });
   }
 
   function openViewer() {
-    if (isCourseControlPage()) {
-      if (!getQueue().length) collectLectures();
-      openNextLecture();
-      return true;
-    }
-
+    if (isCourseControlPage()) { if (!getQueue().length) collectLectures(); openNextLecture(); return true; }
     var links = viewerLinks();
-    if (links.length) {
-      setStatus("뷰어를 여는 중");
-      removeUnloadBlocker(); 
-      location.href = links[0];
-      return true;
-    }
-    setStatus("뷰어 링크를 찾지 못했습니다");
+    if (links.length) { setStatus("뷰어를 여는 중"); location.href = links[0]; return true; }
     return false;
   }
 
   function openNextLecture() {
     var queue = getQueue();
-    if (!queue.length) {
-      setStatus("강의 목록이 비어 있습니다");
-      return;
-    }
+    if (!queue.length) { setStatus("강의 목록이 비어 있습니다"); return; }
     var next = queue.shift();
-    setQueue(queue);
-    renderQueue(queue);
-    setStatus("다음 강의로 이동 중");
-    markFlowActive();
-    removeUnloadBlocker(); 
+    setQueue(queue); renderQueue(queue);
+    setStatus("다음 강의로 이동 중"); markFlowActive();
+    forceRemoveBeforeUnload();
     location.href = next.href; 
   }
 
   function refreshCourseIdFromPage() {
     var id = inferCourseIdFromDocument();
     if (!id || id === COURSE_ID) return;
-
-    COURSE_ID = id;
-    STORAGE_PREFIX = "dj_eclass_helper_" + COURSE_ID;
-    QUEUE_KEY = STORAGE_PREFIX + "_queue";
-    STATE_KEY = STORAGE_PREFIX + "_state";
-    FLOW_KEY = STORAGE_PREFIX + "_flow_active";
-    globalState.activeCourseId = COURSE_ID;
-    writeJson(GLOBAL_KEY, globalState);
-    try {
-      sessionStorage.setItem(FLOW_COURSE_KEY, COURSE_ID);
-    } catch (error) {}
+    applyCourseIdConfig(id);
   }
 
   function clearQueue() {
-    setQueue([]);
-    renderQueue([]);
-    setStatus("목록을 비웠습니다");
+    setQueue([]); renderQueue([]); setStatus("목록을 비웠습니다");
   }
 
   function stopAutomation() {
-    state.autoplay = false;
-    state.autoOpenViewer = false;
-    state.autoNext = false;
-    state.autoResume = false;
-    saveState();
-    clearFlowActive();
-
-    var autoplay = document.querySelector("#dj-helper-autoplay");
-    var autoViewer = document.querySelector("#dj-helper-auto-viewer");
-    var autoNext = document.querySelector("#dj-helper-auto-next");
-    var autoResume = document.querySelector("#dj-helper-auto-resume");
-    if (autoplay) autoplay.checked = false;
-    if (autoViewer) autoViewer.checked = false;
-    if (autoNext) autoNext.checked = false;
-    if (autoResume) autoResume.checked = false;
-
+    state.autoplay = false; state.autoOpenViewer = false; state.autoNext = false; state.autoResume = false;
+    saveState(); clearFlowActive();
+    ["autoplay", "auto-viewer", "auto-next", "auto-resume"].forEach(function(id) {
+      var el = document.querySelector("#dj-helper-" + id);
+      if (el) el.checked = false;
+    });
     setStatus("자동 진행을 중지했습니다");
   }
 
   function escapeHtml(value) {
-    return String(value)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
+    return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
   }
 
   function renderQueue(queue) {
@@ -805,105 +739,64 @@
     if (!list) return;
 
     if (!queue.length) {
-      list.innerHTML = '<div style="color:#aaa;">저장된 강의 목록이 없습니다.</div>';
-      return;
+      list.innerHTML = '<div style="color:#aaa;">저장된 강의 목록이 없습니다.</div>'; return;
     }
 
     list.innerHTML = queue.slice(0, 4).map(function (lecture, index) {
       var title = escapeHtml(lecture.title || "Lecture " + (index + 1));
       return '<button data-dj-open="' + index + '" title="' + title + '" style="' + cssText({
-        width: "100%",
-        display: "block",
-        margin: "4px 0",
-        padding: "6px 7px",
-        border: "1px solid #3f3f46",
-        "border-radius": "6px",
-        background: "#27272a",
-        color: "#fff",
-        "text-align": "left",
-        "font-size": "12px",
-        cursor: "pointer",
-        overflow: "hidden",
-        "text-overflow": "ellipsis",
-        "white-space": "nowrap"
+        width: "100%", display: "block", margin: "4px 0", padding: "6px 7px", border: "1px solid #3f3f46",
+        "border-radius": "6px", background: "#27272a", color: "#fff", "text-align": "left", "font-size": "12px",
+        cursor: "pointer", overflow: "hidden", "text-overflow": "ellipsis", "white-space": "nowrap"
       }) + '">' + title + '</button>';
     }).join("");
 
-    if (queue.length > 4) {
-      list.insertAdjacentHTML("beforeend", '<div style="color:#aaa;margin-top:4px;">외 ' + (queue.length - 4) + "개</div>");
-    }
+    if (queue.length > 4) list.insertAdjacentHTML("beforeend", '<div style="color:#aaa;margin-top:4px;">외 ' + (queue.length - 4) + "개</div>");
 
     Array.from(list.querySelectorAll("[data-dj-open]")).forEach(function (button) {
       button.addEventListener("click", function () {
         var index = Number(button.getAttribute("data-dj-open"));
-        var target = getQueue()[index];
-        if (target) {
-          markFlowActive();
-          removeUnloadBlocker();
-          location.href = target.href;
-        }
+        if (getQueue()[index]) { markFlowActive(); forceRemoveBeforeUnload(); location.href = getQueue()[index].href; }
       });
     });
   }
 
   function addButtonStyles(panel) {
     Array.from(panel.querySelectorAll("button")).forEach(function (button) {
-      if (button.id === "dj-helper-collapse") return;
-      button.style.fontFamily = "inherit";
-      button.style.fontSize = "12px";
-      button.style.border = "1px solid #3f3f46";
-      button.style.borderRadius = "6px";
-      button.style.background = "#27272a";
-      button.style.color = "#fff";
-      button.style.padding = "7px";
-      button.style.cursor = "pointer";
+      if (button.id === "dj-helper-collapse" || button.id === "dj-helper-speed-btn") return;
+      button.style.fontFamily = "inherit"; button.style.fontSize = "12px"; button.style.border = "1px solid #3f3f46";
+      button.style.borderRadius = "6px"; button.style.background = "#27272a"; button.style.color = "#fff"; button.style.padding = "7px"; button.style.cursor = "pointer";
     });
   }
 
   function createPanel() {
-    if (!isPanelPage()) return;
-    if (!document.body || document.querySelector("#dj-helper-panel")) return;
+    if (!isPanelPage() || document.querySelector("#dj-helper-panel")) return;
 
     var panel = document.createElement("div");
     panel.id = "dj-helper-panel";
     panel.style.cssText = cssText({
-      position: "fixed",
-      right: "18px",
-      bottom: "18px",
-      "z-index": "2147483647",
-      width: "300px",
-      padding: "12px",
-      border: "1px solid #27272a",
-      "border-radius": "8px",
-      background: "#18181b",
-      color: "#fff",
+      position: "fixed", right: "18px", bottom: "18px", "z-index": "2147483647", width: "300px", padding: "12px",
+      border: "1px solid #27272a", "border-radius": "8px", background: "#18181b", color: "#fff",
       "font-family": "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
-      "font-size": "13px",
-      "line-height": "1.4",
-      "box-shadow": "0 10px 30px rgba(0,0,0,.35)"
+      "font-size": "13px", "line-height": "1.4", "box-shadow": "0 10px 30px rgba(0,0,0,.35)"
     });
 
     panel.innerHTML =
       '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">' +
-      '<strong>eClass Helper</strong>' +
-      '<button id="dj-helper-collapse" title="접기" style="background:transparent;border:none;color:#fff;cursor:pointer;font-size:16px;">-</button>' +
-      "</div>" +
-      '<div id="dj-helper-body">' +
-      '<div style="margin-bottom:6px;color:#aaa;">강의실 ' + escapeHtml(COURSE_ID) + "</div>" +
+      '<strong>eClass Helper</strong><button id="dj-helper-collapse" title="접기" style="background:transparent;border:none;color:#fff;cursor:pointer;font-size:16px;">-</button></div>' +
+      '<div id="dj-helper-body"><div style="margin-bottom:6px;color:#aaa;">강의실 ' + escapeHtml(COURSE_ID) + '</div>' +
       '<div id="dj-helper-status" style="min-height:18px;margin-bottom:10px;color:#ddd;">대기 중</div>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">' +
-      '<button id="dj-helper-scan">목록 수집</button>' +
-      '<button id="dj-helper-next">다음 강의</button>' +
-      '<button id="dj-helper-play">재생 시작</button>' +
-      '<button id="dj-helper-clear">목록 비움</button>' +
-      '<button id="dj-helper-stop" style="grid-column: span 2;">자동 중지</button>' +
-      "</div>" +
+      '<button id="dj-helper-scan">목록 수집</button><button id="dj-helper-next">다음 강의</button><button id="dj-helper-play">재생 시작</button>' +
+      '<button id="dj-helper-clear">목록 비움</button><button id="dj-helper-stop" style="grid-column: span 2;">자동 중지</button></div>' +
+      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;"><span style="color:#ddd;">재생 속도:</span>' +
+      '<input id="dj-helper-speed-input" type="number" step="1" min="1" max="15" value="' + state.playbackRate + '" style="width:50px; background:#27272a; border:1px solid #3f3f46; color:#fff; padding:3px; border-radius:4px; text-align:center;">' +
+      '<button id="dj-helper-speed-btn" style="background:#27272a; border:1px solid #3f3f46; color:#fff; padding:3px 8px; border-radius:4px; cursor:pointer; font-size:12px;">적용</button></div>' +
       '<label style="display:flex;align-items:center;gap:7px;margin:8px 0 6px;"><input id="dj-helper-autoplay" type="checkbox">페이지 진입 시 재생</label>' +
       '<label style="display:flex;align-items:center;gap:7px;margin:0 0 6px;"><input id="dj-helper-auto-viewer" type="checkbox">강의 뷰어 자동 열기</label>' +
       '<label style="display:flex;align-items:center;gap:7px;margin:0 0 6px;"><input id="dj-helper-auto-resume" type="checkbox">이어보기 자동 확인</label>' +
       '<label style="display:flex;align-items:center;gap:7px;margin:0 0 10px;"><input id="dj-helper-auto-next" type="checkbox">끝나면 다음 강의로 이동</label>' +
-      '<div id="dj-helper-list" style="max-height:130px;overflow:auto;border-top:1px solid #27272a;padding-top:8px;"></div>' +
-      "</div>";
+      '<div id="dj-helper-list" style="max-height:130px;overflow:auto;border-top:1px solid #27272a;padding-top:8px;"></div></div>';
 
     document.body.appendChild(panel);
     addButtonStyles(panel);
@@ -918,50 +811,24 @@
     if (autoNextCheck) autoNextCheck.checked = state.autoNext;
     if (autoResumeCheck) autoResumeCheck.checked = state.autoResume;
 
-    if (autoplayCheck) {
-      autoplayCheck.addEventListener("change", function (event) {
-        state.autoplay = event.target.checked;
-        saveState();
-        setStatus(state.autoplay ? "자동 재생 NO" : "자동 재생 OFF");
-      });
-    }
-    
-    if (autoViewerCheck) {
-      autoViewerCheck.addEventListener("change", function (event) {
-        state.autoOpenViewer = event.target.checked;
-        saveState();
-        setStatus(state.autoOpenViewer ? "뷰어 자동 열기 ON" : "뷰어 자동 열기 OFF");
-      });
-    }
+    if (autoplayCheck) autoplayCheck.addEventListener("change", function (event) { state.autoplay = event.target.checked; saveState(); setStatus(state.autoplay ? "자동 재생 ON" : "자동 재생 OFF"); });
+    if (autoViewerCheck) autoViewerCheck.addEventListener("change", function (event) { state.autoOpenViewer = event.target.checked; saveState(); setStatus(state.autoOpenViewer ? "뷰어 자동 열기 ON" : "뷰어 자동 열기 OFF"); });
+    if (autoNextCheck) autoNextCheck.addEventListener("change", function (event) { state.autoNext = event.target.checked; saveState(); setStatus(state.autoNext ? "끝나면 다음 이동 ON" : "끝나면 다음 이동 OFF"); });
+    if (autoResumeCheck) autoResumeCheck.addEventListener("change", function (event) { state.autoResume = event.target.checked; saveState(); setStatus(state.autoResume ? "이어보기 자동 수락 ON" : "이어보기 자동 수락 OFF"); });
 
-    if (autoNextCheck) {
-      autoNextCheck.addEventListener("change", function (event) {
-        state.autoNext = event.target.checked;
-        saveState();
-        setStatus(state.autoNext ? "끝나면 다음 이동 ON" : "끝나면 다음 이동 OFF");
-      });
+    function saveSpeed() {
+      var val = Number(panel.querySelector("#dj-helper-speed-input").value);
+      if (Number.isInteger(val) && val >= 1 && val <= 15) { state.playbackRate = val; saveState(); schedulePlaybackRateApply(); setStatus(val + "배속 적용됨"); }
     }
-
-    if (autoResumeCheck) {
-      autoResumeCheck.addEventListener("change", function (event) {
-        state.autoResume = event.target.checked;
-        saveState();
-        setStatus(state.autoResume ? "이어보기 자동 수락 ON" : "이어보기 자동 수락 OFF");
-      });
-    }
-
+    panel.querySelector("#dj-helper-speed-btn").addEventListener("click", saveSpeed);
+    panel.querySelector("#dj-helper-speed-input").addEventListener("change", saveSpeed);
+    panel.querySelector("#dj-helper-speed-input").addEventListener("input", saveSpeed);
     panel.querySelector("#dj-helper-scan").addEventListener("click", collectLectures);
     panel.querySelector("#dj-helper-next").addEventListener("click", openNextLecture);
-    panel.querySelector("#dj-helper-play").addEventListener("click", function() {
-      playCurrentMedia(true);
-    });
+    panel.querySelector("#dj-helper-play").addEventListener("click", function() { playCurrentMedia(true); });
     panel.querySelector("#dj-helper-clear").addEventListener("click", clearQueue);
     panel.querySelector("#dj-helper-stop").addEventListener("click", stopAutomation);
-    panel.querySelector("#dj-helper-collapse").addEventListener("click", function () {
-      state.panelCollapsed = !state.panelCollapsed;
-      saveState();
-      applyCollapsedState();
-    });
+    panel.querySelector("#dj-helper-collapse").addEventListener("click", function () { state.panelCollapsed = !state.panelCollapsed; saveState(); applyCollapsedState(); });
 
     renderQueue();
     applyCollapsedState();
@@ -978,30 +845,18 @@
 
   function checkResumePrompt() {
     if (!state.autoResume) return;
-    var docs = findSameOriginFrames();
-    for (var i = 0; i < docs.length; i++) {
-      var doc = docs[i];
+    findSameOriginFrames().forEach(function (doc) {
       try {
-        var buttons = Array.from(doc.querySelectorAll("button, a, div[role='button']"));
-        for (var j = 0; j < buttons.length; j++) {
-          var btn = buttons[j];
-          if (!visible(btn)) continue;
-          var btnText = (btn.innerText || btn.textContent || "").trim();
-          if (btnText === "예" || btnText === "확인" || btnText === "Yes" || btnText === "OK") {
-            var container = btn.closest("div, .modal, .alert, .popup, .confirm") || doc.body;
-            var containerText = (container.innerText || container.textContent || "").replace(/\s+/g, "");
-            if (containerText.indexOf("이전시청기록") !== -1 || 
-                containerText.indexOf("이어서보시겠습니까") !== -1 || 
-                containerText.indexOf("이전학습") !== -1 ||
-                containerText.indexOf("이어보기") !== -1) {
-              btn.click();
-              setStatus("이어보기 알림 수락");
-              return;
-            }
+        Array.from(doc.querySelectorAll("button, a, div[role='button']")).forEach(function (btn) {
+          if (!visible(btn)) return;
+          var text = (btn.innerText || btn.textContent || "").trim();
+          if (["예", "확인", "Yes", "OK"].indexOf(text) !== -1) {
+            var ct = (btn.closest("div, .modal, .alert, .popup, .confirm") || doc.body).innerText.replace(/\s+/g, "");
+            if (ct.indexOf("이전시청") !== -1 || ct.indexOf("이어서") !== -1 || ct.indexOf("이어보기") !== -1) { btn.click(); setStatus("이어보기 수락"); }
           }
-        }
+        });
       } catch (e) {}
-    }
+    });
   }
 
   function injectConfirmOverride() {
@@ -1010,60 +865,47 @@
       script.textContent = "(" + function () {
         var _confirm = window.confirm;
         window.confirm = function (msg) {
-          var autoResume = localStorage.getItem("dj_eclass_helper_auto_resume_flag") === "1";
-          if (autoResume && msg && (msg.indexOf("이전") !== -1 || msg.indexOf("기록") !== -1 || msg.indexOf("이어") !== -1)) {
-            return true;
-          }
+          if (localStorage.getItem("dj_eclass_helper_auto_resume_flag") === "1" && msg && (msg.indexOf("이전") !== -1 || msg.indexOf("기록") !== -1 || msg.indexOf("이어") !== -1)) return true;
           return _confirm(msg);
         };
       }.toString() + ")();";
-      (document.head || document.documentElement).appendChild(script);
-      script.remove();
+      document.documentElement.appendChild(script); script.remove();
     } catch (e) {}
   }
 
   function startObservers() {
-    setInterval(function () {
-      applyMuteState();
-    }, 300);
-
-    setInterval(function () {
-      watchPlaybackEnd();
+    setInterval(function () { applyMuteState(); applyPlaybackRate(); }, 300);
+    setInterval(function () { 
+      watchPlaybackEnd(); 
       checkResumePrompt(); 
-      removeUnloadBlocker(); // 1.5초마다 지속적으로 이탈 방지 팝업을 파괴하여 안전하게 다음 이동 준비
+      forceRemoveBeforeUnload();
     }, 1500);
   }
 
   function init() {
     syncAutoResumeFlag();
     injectConfirmOverride();
+    injectAntiCheatBypass(); 
     injectMuteHijack(); 
+    forceRemoveBeforeUnload();
     listenForFrameMessages();
     createPanel();
     startObservers();
     applyMuteState();
+    applyPlaybackRate();
 
     if (isCourseControlPage()) {
-      clearFlowActive();
-      collectLectures();
-    } else if (pageKind() === "view") {
-      if (state.autoOpenViewer) setTimeout(openViewer, 1000);
-    } else if (pageKind() === "viewer-frame") {
-      if (state.autoOpenViewer) setTimeout(openViewer, 1000);
-    } else if (pageKind() === "viewer" || pageKind() === "cms") {
-      if (state.autoplay) {
-        setTimeout(function() { playCurrentMedia(false); }, 800);
-        setTimeout(function() { playCurrentMedia(false); }, 2500);
-        setTimeout(function() { playCurrentMedia(false); }, 5000);
-      }
+      clearFlowActive(); collectLectures();
+    } else if (pageKind() === "view" && state.autoOpenViewer) {
+      setTimeout(openViewer, 1000);
+    } else if (pageKind() === "viewer-frame" || pageKind() === "viewer" || pageKind() === "cms") {
+      if (pageKind() === "viewer-frame" && state.autoOpenViewer) setTimeout(openViewer, 1000);
+      if (state.autoplay) [800, 2500, 5000, 8000, 12000, 16000].forEach(function(delay) { setTimeout(function() { playCurrentMedia(false); }, delay); });
     } else {
       setStatus("Ready");
     }
   }
 
-  if (document.body) {
-    init();
-  } else {
-    window.addEventListener("DOMContentLoaded", init, { once: true });
-  }
+  if (document.body) { init(); } else { window.addEventListener("DOMContentLoaded", init, { once: true }); }
+
 })();
